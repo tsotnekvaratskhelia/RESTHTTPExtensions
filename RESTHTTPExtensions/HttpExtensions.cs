@@ -1,17 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.Specialized;
 using System.Linq;
-using System.Net.Http;
-using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Web;
 
 namespace RESTHTTPExtensions
 {
-    public static class HttpExtensions
+    public static partial class HttpExtensions
     {
-        public static string UrlFormat<T>(this string url, T value)
+        private const string RouteParam = "Route_";
+        public static string UrlFormat<T>(this string url, T value) where T : class
         {
 
             var paramsDictionary = CreateParamsDictionary(value);
@@ -19,13 +18,58 @@ namespace RESTHTTPExtensions
             url = RouteFormats(url, paramsDictionary);
             var query = CreateQueryParams(paramsDictionary);
 
+            
+            if (string.IsNullOrWhiteSpace(query))
+                return url;
+
             //TODO Find the Best Possible Solution
             return url.Contains("?") ? $"{url}&{query}" : $"{url}?{query}";
         }
-        private static Dictionary<string, string> CreateParamsDictionary<T>(T value)
+        private static Dictionary<string, Param> CreateParamsDictionary<T>(T value)
+        {
+            var type = typeof(T);
+            if (type.IsAnonymousType())
+            {
+                return CreateAnonymousTypeParamsDictionary(value);
+            }
+            else if (type.IsClass)
+            {
+                return CreateClassTypeParamsDictionary(value);
+            }
+            else
+            {
+
+                throw new NotSupportedException($"{nameof(type)} type not supported");
+            }
+        }
+        private static Dictionary<string, Param> CreateAnonymousTypeParamsDictionary<T>(T value)
         {
             var properties = typeof(T).GetProperties();
-            var paramDictionary = new Dictionary<string, string>();
+            var paramDictionary = new Dictionary<string, Param>();
+            foreach (var property in properties)
+            {
+                var propertyValue = property.GetValue(value)?.ToString();
+                if (property.Name.StartsWith(RouteParam, StringComparison.InvariantCultureIgnoreCase))
+                {
+                    var propertyName = property.Name[RouteParam.Length..];
+                    if (string.IsNullOrWhiteSpace(propertyName))
+                        throw new ArgumentOutOfRangeException("incorrect propertyname");
+
+                    var routeParam = new Param(propertyName, propertyValue, ParamType.Route);
+                    paramDictionary.Add(propertyName.ToLower(), routeParam);
+                    continue;
+                }
+
+                var queryParam = new Param(property.Name, propertyValue, ParamType.Query);
+                paramDictionary.Add(property.Name, queryParam);
+            }
+
+            return paramDictionary;
+        }
+        private static Dictionary<string, Param> CreateClassTypeParamsDictionary<T>(T value)
+        {
+            var properties = typeof(T).GetProperties();
+            var paramDictionary = new Dictionary<string, Param>();
             foreach (var property in properties)
             {
                 var propertyValue = property.GetValue(value)?.ToString();
@@ -38,33 +82,53 @@ namespace RESTHTTPExtensions
 
                 if (pathParamAttribute != null)
                 {
-                    paramDictionary.Add(pathParamAttribute.ParamName ?? property.Name, propertyValue);
+                    var propertyName = queryNameAttribute.Name ?? property.Name;
+                    var routeParam = new Param(propertyName, propertyValue, ParamType.Query);
+                    paramDictionary.Add(propertyName.ToLower(), routeParam);
                     continue;
                 }
 
                 if (queryNameAttribute != null)
                 {
-                    paramDictionary.Add(queryNameAttribute.Name ?? property.Name, propertyValue);
+                    var propertyName = queryNameAttribute.Name ?? property.Name;
+                    var queryParam = new Param(propertyName, propertyValue, ParamType.Query);
+                    paramDictionary.Add(propertyName, queryParam);
                     continue;
                 }
 
                 if (disableDefaultBehaviourAttribute == null)
-                    paramDictionary.Add(property.Name, propertyValue);
+                {
+                    var propertyName = queryNameAttribute.Name ?? property.Name;
+                    var queryParam = new Param(propertyName, propertyValue, ParamType.Query);
+                    paramDictionary.Add(property.Name, queryParam);
+                }
+                    
             }
 
             return paramDictionary;
         }
-        private static string RouteFormats(string url, Dictionary<string, string> paramsDictionary)
+        private static string CreateQueryParams(Dictionary<string, Param> paramsDictionary)
+        {
+            var query = HttpUtility.ParseQueryString(string.Empty);
+            foreach (var queryParam in paramsDictionary.Values)
+            {
+                if(queryParam.Type == ParamType.Query)
+                   query.Add(queryParam.Name, queryParam.Value);
+            }
+            return query.ToString();
+        }
+        private static string RouteFormats(string url, Dictionary<string, Param> paramsDictionary)
         {
             Regex regex = new Regex(@"\{([^{ }]+)*\}");
-            url = regex.Replace(url, delegate (Match match) {
+            url = regex.Replace(url, delegate (Match match)
+            {
                 if (match.Groups.Count < 2)
                     return "";
 
-                var key = match.Groups[1].Value;
-                if (paramsDictionary.Remove(key, out var value))
+                var key = match.Groups[1].Value.ToLower();
+                if (paramsDictionary.Remove(key, out var param) && param.Type == ParamType.Route)
                 {
-                    return value;
+                    return param.Value;
                 }
 
                 return match.Value;
@@ -72,14 +136,13 @@ namespace RESTHTTPExtensions
 
             return url;
         }
-        public static string CreateQueryParams(Dictionary<string, string> paramsDictionary)
+        private static bool IsAnonymousType(this Type type)
         {
-            var query = HttpUtility.ParseQueryString(string.Empty);
-            foreach (var queryParam in paramsDictionary)
-            {
-                query.Add(queryParam.Key, queryParam.Value);
-            }
-            return query.ToString();
+            bool hasCompilerGeneratedAttribute = type.GetCustomAttributes(typeof(CompilerGeneratedAttribute), false).Count() > 0;
+            bool nameContainsAnonymousType = type.FullName.Contains("AnonymousType");
+            bool isAnonymousType = hasCompilerGeneratedAttribute && nameContainsAnonymousType;
+
+            return isAnonymousType;
         }
     }
 }
