@@ -38,13 +38,13 @@ namespace RESTHTTPExtensions
 
                 if (pathParamAttribute != null)
                 {
-                    paramDictionary.Add(pathParamAttribute.ParamName, propertyValue);
+                    paramDictionary.Add(pathParamAttribute.ParamName ?? property.Name, propertyValue);
                     continue;
                 }
 
                 if (queryNameAttribute != null)
                 {
-                    paramDictionary.Add(queryNameAttribute.Name, propertyValue);
+                    paramDictionary.Add(queryNameAttribute.Name ?? property.Name, propertyValue);
                     continue;
                 }
 

@@ -4,6 +4,11 @@ namespace RESTHTTPExtensions
 {
     public class QueryNameAttribute : Attribute
     {
+        public QueryNameAttribute()
+        {
+            Name = null;
+        }
+
         public QueryNameAttribute(string name)
         {
 
